@@ -257,6 +257,37 @@ void CanonBLERemote::scan(unsigned int scan_duration) {
     pBLEScan->start(scan_duration);
 }
 
+bool CanonBLERemote::pressShutter() {
+    if (!ensureConnected()) {
+        ESP_LOGE(LOG_TAG, "pressShutter() - brak polaczenia");
+        return false;
+    }
+    BLERemoteCharacteristic* pChar = getTriggerCharacteristic();
+    if (!pChar) return false;
+
+    // Wysyłamy wciśnięcie spustu
+    byte cmdByte = (MODE_IMMEDIATE | BUTTON_RELEASE);
+    pChar->writeValue(&cmdByte, 1, false);
+    delay(70); // minimalne
+    return true;
+}
+
+bool CanonBLERemote::releaseShutter() {
+    if (!isConnected()) {
+        // Nie ma sensu zwalniać, jeśli rozłączone
+        // Ale można spróbować connect(), zależy od logiki
+        return false;
+    }
+    BLERemoteCharacteristic* pChar = getTriggerCharacteristic();
+    if (!pChar) return false;
+
+    // Zwolnienie spustu
+    byte releaseByte = MODE_IMMEDIATE;
+    pChar->writeValue(&releaseByte, 1, false);
+    delay(20);
+    return true;
+}
+
 bool CanonBLERemote::connect() {
     if (camera_address.toString() == "00:00:00:00:00:00") {
         ESP_LOGW(LOG_TAG, "connect() - brak adresu aparatu");

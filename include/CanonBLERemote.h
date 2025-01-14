@@ -75,6 +75,10 @@ public:
      * (np. gdy chcesz wymusić ponowne parowanie).
      */
     void eraseSavedAddress();
+    
+    // NOWE METODY:
+    bool pressShutter();    // wciśnij spust (bez automatycznego zwalniania)
+    bool releaseShutter();  // zwolnij spust
 
     /**
      * Ręczne rozłączenie (jeśli chcesz).
