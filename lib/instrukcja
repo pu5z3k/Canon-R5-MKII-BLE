@@ -1,0 +1,107 @@
+1. Cel i funkcjonalność
+Projekt służy do sterowania aparatami Canon (np. R5, R6, itp.) z poziomu ESP32 za pomocą Bluetooth LE.
+Dostępne funkcje:
+
+Parowanie z aparatem (zapis w NVS adresu aparatu).
+Wyzwolenie migawki (krótki impuls, w stylu spustu migawki).
+Autofokus (krótki impuls focus).
+Przytrzymanie migawki (holdShutter) na zadany czas (np. 5 sekund).
+Odczyt statusu (czy fizycznie połączenie BLE jest aktywne, jaki adres aparatu zapamiętano).
+Kasowanie zapamiętanego adresu (aby wymusić ponowne parowanie).
+Sterowanie przez komendy z Serial Monitor (p, s, f, h, r, e, d).
+Obecny etap to stabilny fundament: główna logika BLE, NVS i komendy Serial działają poprawnie.
+
+2. Struktura plików
+Załóżmy, że nasz projekt ma taką strukturę (PlatformIO, ale analogicznie zadziała w innych środowiskach):
+
+css
+Skopiuj kod
+your_project/
+ ├─ platformio.ini
+ ├─ src/
+ │   ├─ main.cpp                
+ │   └─ CanonBLERemote.cpp     
+ ├─ include/
+ │   └─ CanonBLERemote.h        
+ ├─ lib/
+ │   └─ ArduinoNvs/
+ │       ├─ ArduinoNvs.h
+ │       └─ ArduinoNvs.cpp
+ └─ ...
+Główne pliki:
+main.cpp
+
+Zawiera setup() i loop().
+Czyta komendy z Serial i wywołuje metody biblioteki CanonBLERemote.
+Nie zawiera niskopoziomowych operacji BLE – jedynie woła gotowe funkcje (pair(), trigger(), focus(), etc.).
+CanonBLERemote.h / CanonBLERemote.cpp
+
+Klasa CanonBLERemote – kluczowa biblioteka do komunikacji BLE z aparatem.
+Zawiera:
+Metody: pair(), trigger(), focus(), holdShutter(), eraseSavedAddress() itd.
+Logikę connect() / disconnect() BLE.
+Wewnętrzne odwołania do characteristic (SHUTTER_CONTROL_SERVICE, PAIRING_SERVICE).
+Mechanizm zapisu/odczytu adresu aparatu w NVS.
+ArduinoNvs.h / ArduinoNvs.cpp
+
+Prosta biblioteka do zarządzania NVS (Non-Volatile Storage) – pozwala zapisywać i czytać dane w pamięci Flash.
+Używana przez CanonBLERemote do zapisywania adresu aparatu (cameraaddr).
+3. Zasada działania i zależności
+Inicjalizacja:
+
+W main.cpp w setup() wywołuje się canon_ble.init().
+init() uruchamia BLE, wczytuje z NVS zapamiętany adres aparatu, jeśli istnieje.
+Parowanie:
+
+Komenda p w Serial → canon_ble.pair(15) (np. 15 sekund skanowania).
+Wewnątrz pair() uruchamia się scan(), a potem connect() z zabezpieczeniem MITM.
+Po sukcesie zapisujemy adres aparatu w NVS i przechodzimy na tryb NO_MITM.
+Wyzwolenie migawki / Fokus / Hold:
+
+Komendy s, f, h w Serial → wywołanie metod trigger(), focus(), holdShutter().
+Każda z metod sprawdza, czy jest ensureConnected(), jeśli nie – łączy się.
+Wysyła odpowiednie bajty do charakterystyki BLE (shutter control).
+Domyślnie nie rozłącza się zaraz po akcji (by przyspieszyć kolejne działania).
+Sprawdzanie połączenia:
+
+Komenda r → isConnected() → zwraca true / false z wewnętrznego stanu (ConnectivityState).
+Kasowanie pamięci NVS:
+
+Komenda e → eraseSavedAddress(), w środku ArduinoNvs kasuje klucz cameraaddr.
+Rozłączanie manualne:
+
+Komenda d w main.cpp → canon_ble.disconnect() – jeśli chcemy zachować styl oryginalnego pilota (rozłączać się zaraz po naciśnięciu spustu).
+4. Gdzie i jak wprowadzać nowe funkcje
+Nowe metody związane z wyzwalaniem aparatu (np. zoom tele, zoom wide, start/stop nagrywanie wideo) warto dodać w klasie CanonBLERemote.
+
+Zaleca się wzorować na istniejących metodach (trigger(), focus()) – najpierw ensureConnected(), potem pRemoteCharacteristic->writeValue(...).
+Jeśli planujesz nowy typ przechowywania ustawień w pamięci (np. parametry timelapse), możesz:
+
+Dodać nowe klucze w NVS (np. "timelapse_interval"),
+W metodzie np. setTimelapseInterval(int interval) w CanonBLERemote – użyć nvs.setInt(...) / commit().
+W pliku main.cpp warto zachować styl „prosty interfejs” – komendy w Serial lub fizyczne przyciski → wywołania metod z canon_ble.
+
+5. Elementy, których lepiej nie zmieniać (stabilna podstawa)
+Podstawowe metody BLE (np. connect(), disconnect(), init()) – działają stabilnie i rzadko wymagają modyfikacji, o ile nie masz konkretnego powodu (np. inny mechanizm bezpieczeństwa BLE).
+
+Stałe:
+
+SERVICE_UUID, PAIRING_SERVICE, SHUTTER_CONTROL_SERVICE – to kluczowe identyfikatory Canona; zmiana złamie kompatybilność.
+Bity spustu: BUTTON_RELEASE, BUTTON_FOCUS, MODE_IMMEDIATE.
+Archiwum NVS (zapisywanie klucza "cameraaddr") – logika jest kompletna i działa. Lepiej tego nie ruszać.
+
+Ogólna struktura plików – obecny podział (main, biblioteka CanonBLE, biblioteka NVS) jest przejrzysty.
+
+6. Jak przywrócić ten stan, jeśli coś się popsuje?
+Rekomendacja: użyj systemu kontroli wersji, np. Git.
+
+Zrób commit z opisem „Canon BLE – stabilny fundament” i ewentualnie tag v1.0.
+W razie „psucia się” w przyszłości, możesz zrobić git checkout v1.0 i wrócić do stanu idealnego.
+Jeśli nie używasz Gita, to przynajmniej zarchiwizuj te pliki w osobnym folderze.
+
+Podsumowanie
+Ten etap projektu stanowi stabilną bazę – BLE działa, parowanie i zapisy w NVS są sprawdzone.
+W main.cpp zorganizowaliśmy czytelną obsługę komend w Serial.
+Nowe funkcje (sterowanie dodatkowymi przyciskami, parametry, integracje) dodajemy w CanonBLERemote (jeśli to dotyczy aparatu), bądź w main.cpp (jeśli chodzi np. o UI).
+Aby zmniejszyć opóźnienie, ustawiliśmy mniejsze delay() w trigger() i focus(), a przy okazji nie rozłączamy się automatycznie – co często przyspiesza reakcję aparatu.
+Utrzymujemy porządek: nie zmieniamy fundamentów, jeśli nie ma takiej potrzeby.
