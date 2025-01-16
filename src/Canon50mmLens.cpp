@@ -1,49 +1,90 @@
 #include "Canon50mmLens.h"
 
+static const int spiDelay = 2;  
+static const int stepDelay = 20; 
+
 void Canon50mmLens::initLens() {
     stopOperation = false;
-    focuserPosition = config.lensMaxFocusPos; // domyślnie 4000
 
+    // Inicjalizacja SPI
     SPI.begin(PIN_SPI_SCK, PIN_SPI_MISO, PIN_SPI_MOSI, PIN_SPI_SS);
-
-    // Według Twojego sprawdzonego kodu
-    SPI.setFrequency(1000000); // 1 MHz
+    SPI.setFrequency(1000000);
     SPI.setBitOrder(MSBFIRST);
     SPI.setDataMode(SPI_MODE3);
-
     pinMode(PIN_SPI_SS, OUTPUT);
     digitalWrite(PIN_SPI_SS, HIGH);
+
+    // Pełny przejazd 4000->0->4000, wolniejszy (np. singleStepSize=100, stepDelayMs=50)
+    focuserPosition = 4000;
+    Serial.println("[Lens] initLens: rozpoczynam pełny przejazd 4000->0->4000 (kalibracja).");
+    moveToPositionGradually(config.lensMaxFocusPos, 100, 50); // 4000->0
+    if (!stopOperation) {
+      moveToPositionGradually(config.lensMinFocusPos, 100, 50); // 0->4000
+    }
+
+    Serial.println("[Lens] Kalibracja zakończona, obiektyw w pozycji 4000 (start).");
 }
 
 /**
- * MoveFocus(steps) – ruch jednorazowy (zakres, SPI transfer).
+ * Test: 4000->2000->4000
  */
-void Canon50mmLens::MoveFocus(int steps) {
-    int newPos = focuserPosition + steps;
-    if (newPos < config.lensMinFocusPos || newPos > config.lensMaxFocusPos) {
-        Serial.println("[Lens] Próba wyjścia poza zakres autofokusa!");
-        return; 
+void Canon50mmLens::initLensTest() {
+    stopOperation = false;
+    Serial.println("[Lens] initLensTest: 4000->2000->4000");
+
+    int midPos = 2000;
+
+    if (focuserPosition > midPos) {
+        moveToPositionGradually(midPos, 100, 30);
+    }
+    if (!stopOperation) {
+      moveToPositionGradually(4000, 100, 30);
     }
 
-    uint8_t x = highByte(steps);
-    uint8_t y = lowByte(steps);
+    Serial.printf("[Lens] test done. obiektyw w pozycji = %d\n", focuserPosition);
+}
+
+/**
+ * Wraca do start=4000
+ */
+void Canon50mmLens::initLensReturnToStart() {
+    stopOperation = false;
+    Serial.println("[Lens] initLensReturnToStart: jedziemy do 4000");
+    moveToPositionGradually(4000, 100, 40);
+    Serial.printf("[Lens] Gotowe, stoimy w %d\n", focuserPosition);
+}
+
+/**
+ * MoveFocusSmooth(steps)
+ *  - 1-razowy płynny ruch
+ */
+void Canon50mmLens::MoveFocusSmooth(int steps) {
+    int newPos = focuserPosition + steps;
+
+    // Zawężenie do [0..4000]
+    if(newPos < rangeMin()) newPos = rangeMin();
+    if(newPos > rangeMax()) newPos = rangeMax();
+
+    int realSteps = newPos - focuserPosition;
+    if(realSteps == 0) return;
+
+    // Odwracanie kierunku (jeśli flaga w config jest ustawiona)
+    if (config.invertFocusDirection) {
+        realSteps = -realSteps;
+    }
 
     digitalWrite(PIN_SPI_SS, LOW);
 
-    SPI.transfer(0x0A);
-    delay(15);
+    uint8_t x = highByte(realSteps);
+    uint8_t y = lowByte(realSteps);
 
-    SPI.transfer(0x44);
-    delay(5);
+    SPI.transfer(0x0A); delay(spiDelay);
+    SPI.transfer(0x44); delay(spiDelay);
+    SPI.transfer(x);    delay(spiDelay);
+    SPI.transfer(y);    delay(spiDelay);
+    SPI.transfer(0x00); delay(spiDelay);
 
-    SPI.transfer(x);
-    delay(5);
-
-    SPI.transfer(y);
-    delay(5);
-
-    SPI.transfer(0x00);
-    delay(10);
+    delay(2);
 
     digitalWrite(PIN_SPI_SS, HIGH);
 
@@ -51,67 +92,60 @@ void Canon50mmLens::MoveFocus(int steps) {
 }
 
 /**
- * ContinuousFocusMinusX(stepSize, totalShots)
- * – wielokrotne MoveFocus(-stepSize) z przerwą config.stepDelayMS
- */
-void Canon50mmLens::ContinuousFocusMinusX(int stepSize, unsigned long totalShots) {
-    stopOperation = false;
-    for (unsigned long i = 0; i < totalShots; i++) {
-        if (stopOperation) {
-            Serial.println("[Lens] Przerwano ruch obiektywu (stopOperation=true).");
-            break;
-        }
-        MoveFocus(-stepSize);
-        delay(config.stepDelayMS);
-    }
-}
-
-/**
- * Funkcja pomocnicza: jedź w małych krokach do 'targetPos'
- * np. stepSize=100, stepDelayMs=60.
+ * moveToPositionGradually():
+ *  - pętla, w której wywołujemy MoveFocusSmooth małymi paczkami
  */
 void Canon50mmLens::moveToPositionGradually(int targetPos, int singleStepSize, int stepDelayMs) {
-    // Pętla, dopóki nie osiągniemy targetPos
-    // i dopóki stopOperation nie jest true
-    while (focuserPosition != targetPos) {
-        if (stopOperation) {
-            Serial.println("[Lens] Przerwano moveToPositionGradually (stopOperation=true).");
-            return;
-        }
-        int remaining = targetPos - focuserPosition;
-        int sign = (remaining > 0) ? 1 : -1;
-
-        // Jeśli mały "krok" przekracza to, co zostało, zmniejszamy go
-        int stepNow = abs(remaining);
+    while (!stopOperation && (focuserPosition != targetPos)) {
+        int diff = targetPos - focuserPosition;
+        int sign = (diff > 0) ? 1 : -1;
+        int stepNow = abs(diff);
         if (stepNow > singleStepSize) stepNow = singleStepSize;
 
-        MoveFocus(sign * stepNow);
+        MoveFocusSmooth(sign * stepNow);
         delay(stepDelayMs);
     }
 }
 
 /**
- * Kalibracja obiektywu: min -> max -> min
- * Każdy odcinek robimy w pętli małych kroków
+ * Sekwencja 4..9 -> 4000->0
+ * Po zakończeniu 1 sek pauzy i powrót do 4000
  */
-void Canon50mmLens::calibrateLensPositions() {
-    Serial.println("[Lens] Kalibracja: MIN -> MAX -> MIN");
+void Canon50mmLens::ContinuousFocusStartToStop(int x, unsigned long ileZdjec) {
+    stopOperation = false;
 
-    // 1) zjedź do minFocus
-    if (focuserPosition != config.lensMinFocusPos) {
-        moveToPositionGradually(config.lensMinFocusPos, 100, 60);
+    // Upewniamy się, że stoimy w 4000
+    if (focuserPosition != 4000 && !stopOperation) {
+        moveToPositionGradually(4000, 100, 40);
     }
-    Serial.println("  => obiektyw w pozycji minimalnej.");
+    if (stopOperation) {
+      Serial.println("[Lens] PRZERWANO przed sekwencją, zostajemy w biezacej pozycji");
+      return;
+    }
 
-    // 2) jedź do maxFocus
-    if (focuserPosition != config.lensMaxFocusPos) {
-        moveToPositionGradually(config.lensMaxFocusPos, 100, 60);
-    }
-    Serial.println("  => obiektyw w pozycji maksymalnej.");
+    Serial.printf("[Lens] Sekwencja: 4000->0, step=%d, zdj=%lu.\n", x, ileZdjec);
+    Serial.println("[Lens] MIGAWKA ON (symbolicznie)");
 
-    // 3) wróć do minFocus
-    if (focuserPosition != config.lensMinFocusPos) {
-        moveToPositionGradually(config.lensMinFocusPos, 100, 60);
+    // Jedziemy w dół do 0
+    while (!stopOperation && focuserPosition > 0) {
+        MoveFocusSmooth(-x);
+        delay(10);
     }
-    Serial.println("  => obiektyw ponownie w minFocus. Kalibracja zakończona.");
+
+    Serial.println("[Lens] MIGAWKA OFF");
+
+    if (stopOperation) {
+        Serial.println("[Lens] PRZERWANO w trakcie sekwencji");
+        return;
+    }
+
+    // finalnie stoimy w 0
+    Serial.println("[Lens] Osiągnięto 0 (stop). 1s pauzy...");
+    delay(1000);
+
+    // powrót do 4000
+    Serial.println("[Lens] Powrót do 4000");
+    moveToPositionGradually(4000, 100, 40);
+
+    Serial.println("[Lens] Koniec sekwencji, wróciliśmy do 4000 (start).");
 }

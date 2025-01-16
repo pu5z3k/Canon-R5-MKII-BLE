@@ -12,30 +12,26 @@ struct FocusSequenceParam {
 // Główna klasa konfiguracyjna
 class CanonRemoteConfig {
 public:
-    // -- Parametry obiektywu (zakres ostrości)
-    int lensMinFocusPos = 0;
-    int lensMaxFocusPos = 4000;
+    // Główne wartości: 4000 = start (wsunięty), 0 = stop (wysunięty)
+    int lensMinFocusPos = 4000;  // start
+    int lensMaxFocusPos = 0;     // stop
 
-    // -- Opóźnienia i czasy (w ms, unless noted otherwise)
-    // Czas w mikrosekundach do minimalnego spiDelay – używany w obiektywie
+    // Flaga do odwrócenia kierunku (jeśli by się okazało, że jeszcze ruch jest odwrotny)
+    bool invertFocusDirection = false;
+
+    // Podstawowe parametry
     int spiDelayUS = 2;
-    // Opóźnienie między kolejnymi przesunięciami w stackowaniu (co "zdjęcie")
     int stepDelayMS = 20;
 
-    // -- Parametry spustu migawki
-    // Domyślnie: żadnych długich holdShutter – bo używamy pressShutter() / releaseShutter().
-    // Ale możesz tu dodać np. defaultHoldTime = 30000 itp.
-
-    // -- Tablica możliwych sekwencji (z przykładu: -10 => 74 zdjęć, -8 => 92 zdjęć, itp.)
-    //  Ujemny krok = cofanie ostrości w stronę minimalnej (faktycznie my wywołamy MoveFocus(-stepSize))
-    static const int SEQ_COUNT = 6; // bo mamy 6 par stepSize / totalShots
+    // Dla sekwencji 4..9 -> jedziemy 4000->0
+    static const int SEQ_COUNT = 6;
     FocusSequenceParam sequences[SEQ_COUNT] = {
-        {10, 74UL},   // case '4'
-        {8,  92UL},   // case '5'
-        {6,  123UL},  // case '6'
-        {4,  184UL},  // case '7'
-        {2,  366UL},  // case '8'
-        {1,  731UL}   // case '9'
+        {10, 74UL},
+        {8,  92UL},
+        {6,  123UL},
+        {4,  184UL},
+        {2,  366UL},
+        {1,  731UL}
     };
 };
 

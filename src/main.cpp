@@ -3,35 +3,41 @@
 #include "Canon50mmLens.h"
 #include "CanonRemoteConfig.h"
 
-// GLOBALNE OBIEKTY
-CanonRemoteConfig  globalConfig;            // Parametry w jednym miejscu
+// Globalne obiekty
+CanonRemoteConfig  globalConfig;            
 CanonBLERemote     canon_ble("ESP32 Canon BLE Demo");
-Canon50mmLens      lens(globalConfig);      // Konstruktor z referencją do globalConfig
+Canon50mmLens      lens(globalConfig);
 
-void executeFocusSequence(int seqIndex);
 void handleSerialCommands();
+void runFocusSequenceStartToStop(int seqIndex); // 4000->0
 
 void setup() {
   Serial.begin(115200);
   delay(1000);
 
-  Serial.println("\n=== ESP32 Canon BLE Remote + Canon50mm Lens (v1.1) ===");
-  Serial.println("Komendy w Serial:");
-  Serial.println(" p - parowanie (15s scan) [BLE]");
-  Serial.println(" s - shutter (krótki impuls) [BLE]");
-  Serial.println(" f - focus (krótki impuls)   [BLE]");
-  Serial.println(" h - hold shutter (5 sek)    [BLE]");
-  Serial.println(" r - status połączenia / zapisanego adresu [BLE]");
-  Serial.println(" e - erase (usuń klucz NVS)  [BLE]");
-  Serial.println(" d - disconnect [BLE]");
-  Serial.println(" o - init lens (SPI) -> kalibracja min->max->min");
-  Serial.println(" k - przerwij cykl (stopOperation=true) + zwolnij migawkę");
-  Serial.println(" 4..9 - wywołanie sekwencji (z globalConfig.sequences)");
+  // Jeżeli okaże się, że ruch nadal jest odwrotny -> odkomentuj:
+  // globalConfig.invertFocusDirection = true;
+
+  Serial.println("\n=== ESP32 Canon BLE Remote v2.0 (start=4000 [wsunięty], stop=0 [wysunięty]) ===");
+  Serial.println("Komendy:");
+  Serial.println(" p - parowanie(15s)");
+  Serial.println(" s - shutter (trigger) | m - shutter (trigger) ");
+  Serial.println(" f - focus");
+  Serial.println(" h - hold(5s)");
+  Serial.println(" r - BLE status/addr");
+  Serial.println(" e - eraseNVS");
+  Serial.println(" d - disconnect");
+  Serial.println(" k - przerwanie (stopOperation, powtórna inicjalizacja obiektywu)");
+  Serial.println(" o - initLensReturnToStart (do 4000)");
+  Serial.println(" t - initLensTest (4000->2000->4000)");
+  Serial.println(" 4..9 - sekwencja start->stop (4000->0), potem powrót do 4000");
   Serial.println();
 
-  canon_ble.init();      // Inicjalizacja BLE
-  lens.initLens();       // Inicjalizacja obiektywu (SPI)
-  lens.calibrateLensPositions(); // Od razu kalibracja min->max->min
+  // BLE
+  canon_ble.init();
+
+  // Obiektyw - automatyczna kalibracja (full pass)
+  lens.initLens();
 }
 
 void loop() {
@@ -40,109 +46,106 @@ void loop() {
 }
 
 void handleSerialCommands() {
-  if (Serial.available()) {
-    char cmd = Serial.read();
-    switch (cmd) {
+  if (!Serial.available()) return;
+  char cmd = Serial.read();
 
-      case 'p':
-        Serial.println("Parowanie... (włącz Remote Pairing w Canonie, 15s scan)");
-        if (canon_ble.pair(15)) {
-          Serial.println("Sparowano pomyślnie!");
-        } else {
-          Serial.println("Parowanie nie powiodło się.");
-        }
-        break;
-
-      case 'o':
-        Serial.println("=> Ponowna kalibracja obiektywu (min->max->min) w małych krokach...");
-        lens.stopOperation = false;
-        lens.calibrateLensPositions();
-        break;
-
-      case 's':
-        Serial.println("Wyzwolenie migawki (trigger)...");
-        if (!canon_ble.trigger()) {
-          Serial.println("Błąd: trigger nie powiodł się!");
-        } else {
-          Serial.println("OK!");
-        }
-        break;
-
-      case 'f':
-        Serial.println("Autofocus (focus)...");
-        if (!canon_ble.focus()) {
-          Serial.println("Błąd: focus nie powiodł się!");
-        } else {
-          Serial.println("OK!");
-        }
-        break;
-
-      case 'h':
-        Serial.println("Hold shutter przez 5 sek...");
-        if (!canon_ble.holdShutter(5000)) {
-          Serial.println("Błąd: holdShutter nie powiodł się!");
-        } else {
-          Serial.println("OK! Zwolnił spust po 5s");
-        }
-        break;
-
-      case 'r':
-      {
-        bool connected = canon_ble.isConnected();
-        String addr = canon_ble.getPairedAddressString();
-        Serial.printf("Połączenie: %s\n", connected ? "TAK" : "NIE");
-        Serial.printf("Zapamiętany adres: %s\n", addr.c_str());
+  switch (cmd) {
+    case 'p':
+      Serial.println("Parowanie (15s)...");
+      if (canon_ble.pair(15)) {
+        Serial.println("Sparowano pomyślnie!");
+      } else {
+        Serial.println("Parowanie nie powiodło się.");
       }
       break;
 
-      case 'e':
-        Serial.println("Usuwanie klucza 'cameraaddr' w NVS...");
-        canon_ble.eraseSavedAddress();
-        Serial.println("OK. Możesz ponownie sparować ('p').");
-        break;
+    case 's':
+    case 'm':  // nowa funkcja "m" - również wyzwolenie migawki
+      Serial.println("Shutter (trigger)...");
+      if (!canon_ble.trigger()) {
+        Serial.println("Błąd: trigger!");
+      } else {
+        Serial.println("OK!");
+      }
+      break;
 
-      case 'd':
-        Serial.println("Rozłączam...");
-        canon_ble.disconnect();
-        break;
+    case 'f':
+      Serial.println("Focus...");
+      if (!canon_ble.focus()) {
+        Serial.println("Błąd: focus!");
+      } else {
+        Serial.println("OK!");
+      }
+      break;
 
-      case 'k':
-        Serial.println("Ustawiam stopOperation = true i zwalniam migawkę (if pressed)...");
-        lens.stopOperation = true;
-        canon_ble.releaseShutter();
-        break;
+    case 'h':
+      Serial.println("holdShutter(5s)...");
+      if (!canon_ble.holdShutter(5000)) {
+        Serial.println("Błąd: holdShutter!");
+      } else {
+        Serial.println("OK!");
+      }
+      break;
 
-      case '4': case '5': case '6': case '7': case '8': case '9':
-        executeFocusSequence(cmd - '4');  // ASCII -> indeks
-        break;
+    case 'r': {
+      bool connected = canon_ble.isConnected();
+      String addr = canon_ble.getPairedAddressString();
+      Serial.printf("Połączenie: %s\n", connected ? "TAK" : "NIE");
+      Serial.printf("Aparat addr: %s\n", addr.c_str());
+    } break;
 
-      default:
-        Serial.println("Nieznane polecenie.");
-        break;
-    }
+    case 'e':
+      Serial.println("eraseSavedAddress()...");
+      canon_ble.eraseSavedAddress();
+      Serial.println("OK. Możesz ponownie sparować (p).");
+      break;
+
+    case 'd':
+      Serial.println("disconnect()...");
+      canon_ble.disconnect();
+      break;
+
+    case 'k':
+      Serial.println("PRZERWANIE: stopOperation = true, re-inicjalizacja obiektywu...");
+      lens.stopOperation = true;
+      // Jeśli migawka jest wciśnięta - zwolnij (opcjonalnie):
+      canon_ble.releaseShutter();
+      // Ponowna pełna inicjalizacja (pełny przejazd)
+      lens.initLens();
+      break;
+
+    case 'o':
+      Serial.println("initLensReturnToStart => jedziemy do 4000");
+      lens.stopOperation = false;
+      lens.initLensReturnToStart();
+      break;
+
+    case 't':
+      Serial.println("initLensTest => 4000->2000->4000");
+      lens.stopOperation = false;
+      lens.initLensTest();
+      break;
+
+    // sekwencje 4..9 => 4000->0 i powrót do 4000
+    case '4': runFocusSequenceStartToStop(0); break;
+    case '5': runFocusSequenceStartToStop(1); break;
+    case '6': runFocusSequenceStartToStop(2); break;
+    case '7': runFocusSequenceStartToStop(3); break;
+    case '8': runFocusSequenceStartToStop(4); break;
+    case '9': runFocusSequenceStartToStop(5); break;
+
+    default:
+      Serial.println("Nieznane polecenie.");
+      break;
   }
 }
 
-void executeFocusSequence(int seqIndex) {
+void runFocusSequenceStartToStop(int seqIndex) {
   if (seqIndex < 0 || seqIndex >= globalConfig.SEQ_COUNT) {
-    Serial.println("Zły indeks sekwencji!");
+    Serial.println("Błędny indeks sekwencji!");
     return;
   }
-
-  FocusSequenceParam param = globalConfig.sequences[seqIndex];
-
-  if (!canon_ble.pressShutter()) {
-    Serial.println("Błąd: nie udało się wcisnąć migawki!");
-    return;
-  }
-
+  FocusSequenceParam p = globalConfig.sequences[seqIndex];
   lens.stopOperation = false;
-  Serial.printf("Rozpoczynam sekwencję: stepSize=%d, totalShots=%lu\n",
-                 param.stepSize, param.totalShots);
-
-  // Ruch minusX w pętli
-  lens.ContinuousFocusMinusX(param.stepSize, param.totalShots);
-
-  Serial.println("Koniec sekwencji / przerwanie -> release shutter...");
-  canon_ble.releaseShutter();
+  lens.ContinuousFocusStartToStop(p.stepSize, p.totalShots);
 }
